@@ -1,3 +1,8 @@
+use mmb_core::{compose, CompositionSettings, OutputSettings};
+
 fn main() {
-    println!("Hello, world!");
+    let composition = CompositionSettings::default();
+    let output = OutputSettings::default();
+
+    compose(composition, output);
 }
