@@ -3,7 +3,7 @@ use std::path;
 use ghakuf::messages::{Message, MetaEvent};
 use ghakuf::writer::Writer;
 
-use crate::pitch::Pitches;
+use crate::pitch::{Pitches, frequency_to_midi_note};
 use crate::CompositionSettings;
 
 const WHOLE_NOTE: usize = 1920;
@@ -100,13 +100,13 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
     });
     messages.push(Message::TrackChange);
 
-    let _velocity = 100;
-    let current_position = 0;
-    let _current_bar_length = 0;
+    let velocity = 100;
+    let mut current_position = 0;
+    let mut current_bar_length = 0;
     let mut note_length = composition.n1_length;
 
-    let patterns: Vec<VOPattern> = vec![];
-    let notes = vec![];
+    let mut patterns: Vec<VOPattern> = vec![];
+    let mut notes = vec![];
 
     let current_pattern = VOPattern {
         notes: notes,
@@ -115,7 +115,7 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
     };
 
     for i in 0..pitches.len() {
-        let _pitch = pitches.get(i).unwrap(); // fixme
+        let pitch = *pitches.get(i).unwrap(); // fixme
 
         // swap note length if conflicts with previously added note in other pattern
         if offset_conflict(current_position - current_pattern.offset, &patterns) {
@@ -141,11 +141,19 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
         //             currentPosition  += note.duration;
         //             currentBarLength += note.duration;
 
-        let _note = VONote {
-            note: 0, //ftomidi,
+        let note = VONote {
+            note: frequency_to_midi_note(pitch) ,
             offset: current_position,
             duration: note_length as usize * QUARTER_NOTE,
         };
+        // update current sequence position
+        current_position += &note.duration;
+        current_bar_length += &note.duration;
+
+        // add note to Vector (so it can be re-added in next iterations)
+        notes.push(note);
+
+
     }
 
     // ###############################

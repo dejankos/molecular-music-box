@@ -126,7 +126,7 @@ fn index_of(s: &str, search: &str) -> isize {
     }
 }
 
-fn frequency_to_midi_note(frequency: f64) -> usize {
+pub fn frequency_to_midi_note(frequency: f64) -> usize {
     //fixme oh well
     let r = 1.05946309436;
     let mut ref_ = 523.251;
