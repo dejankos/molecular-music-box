@@ -1,9 +1,11 @@
+use std::cell::{Ref, RefCell};
 use std::path;
+use std::rc::Rc;
 
 use ghakuf::messages::{Message, MetaEvent};
 use ghakuf::writer::Writer;
 
-use crate::pitch::{Pitches, frequency_to_midi_note};
+use crate::pitch::{frequency_to_midi_note, Pitches};
 use crate::CompositionSettings;
 
 const WHOLE_NOTE: usize = 1920;
@@ -23,7 +25,7 @@ struct VONote {
 }
 
 struct VOPattern {
-    notes: Vec<VONote>,
+    notes: Rc<RefCell<Vec<VONote>>>,
     // all the notes within the pattern
     pattern_num: usize,
     // the number of this pattern within the total sequence
@@ -44,11 +46,11 @@ impl VOPattern {
     }
 
     fn get_offsets(&self) -> Vec<usize> {
-        self.notes.iter().map(|n| n.offset).collect()
+        self.notes.borrow().iter().map(|n| n.offset).collect()
     }
 
     fn get_range_start_offset(&self) -> usize {
-        if let Some(n) = self.notes.get(0) {
+        if let Some(n) = self.notes.borrow().get(0) {
             n.offset
         } else {
             0
@@ -56,7 +58,7 @@ impl VOPattern {
     }
 
     fn get_range_end_offset(&self) -> usize {
-        if let Some(n) = self.notes.last() {
+        if let Some(n) = self.notes.borrow().last() {
             n.offset + n.duration
         } else {
             0
@@ -106,10 +108,10 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
     let mut note_length = composition.n1_length;
 
     let mut patterns: Vec<VOPattern> = vec![];
-    let mut notes = vec![];
+    let mut notes = Rc::new(RefCell::new(vec![]));
 
     let current_pattern = VOPattern {
-        notes: notes,
+        notes: notes.clone(),
         pattern_num: 0,
         offset: current_position,
     };
@@ -142,7 +144,7 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
         //             currentBarLength += note.duration;
 
         let note = VONote {
-            note: frequency_to_midi_note(pitch) ,
+            note: frequency_to_midi_note(pitch),
             offset: current_position,
             duration: note_length as usize * QUARTER_NOTE,
         };
@@ -151,9 +153,7 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
         current_bar_length += &note.duration;
 
         // add note to Vector (so it can be re-added in next iterations)
-        notes.push(note);
-
-
+        notes.borrow_mut().push(note);
     }
 
     // ###############################
@@ -175,7 +175,7 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
 //fixme
 fn offset_conflict(note_offset: usize, patterns: &Vec<VOPattern>) -> bool {
     for p in patterns {
-        if p.notes.len() > 0 && p.conflicts(note_offset) {
+        if p.notes.borrow().len() > 0 && p.conflicts(note_offset) {
             return true;
         }
     }
