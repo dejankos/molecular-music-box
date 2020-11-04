@@ -1,8 +1,8 @@
-use std::cell::{Ref, RefCell};
-use std::path;
-use std::rc::Rc;
 
-use ghakuf::messages::{Message, MetaEvent};
+use std::path;
+
+
+use ghakuf::messages::{Message, MetaEvent, MidiEvent};
 use ghakuf::writer::Writer;
 
 use crate::pitch::{frequency_to_midi_note, Pitches};
@@ -16,6 +16,7 @@ const SIXTEENTH_NOTE: usize = EIGHT_NOTE / 2;
 const THIRTY_SECOND_NOTE: usize = SIXTEENTH_NOTE / 2;
 const SIXTY_FOURTH_NOTE: usize = THIRTY_SECOND_NOTE / 2;
 
+#[derive(Clone)]
 struct VONote {
     note: usize,
     // MIDI note number
@@ -24,8 +25,9 @@ struct VONote {
     duration: usize, // length of the note
 }
 
+#[derive(Clone)]
 struct VOPattern {
-    notes: Rc<RefCell<Vec<VONote>>>,
+    notes: Vec<VONote>,
     // all the notes within the pattern
     pattern_num: usize,
     // the number of this pattern within the total sequence
@@ -37,7 +39,7 @@ impl VOPattern {
         let mut res = false;
         for note_offset in self.get_offsets() {
             let actual_offset = note_offset - self.offset;
-            if actual_offset == other || other % actual_offset == 0 {
+            if actual_offset == other || actual_offset > 0 && other % actual_offset == 0 {
                 res = true;
                 break;
             }
@@ -45,12 +47,16 @@ impl VOPattern {
         res
     }
 
+    fn add_note(&mut self, note: VONote) {
+        self.notes.push(note);
+    }
+
     fn get_offsets(&self) -> Vec<usize> {
-        self.notes.borrow().iter().map(|n| n.offset).collect()
+        self.notes.iter().map(|n| n.offset).collect()
     }
 
     fn get_range_start_offset(&self) -> usize {
-        if let Some(n) = self.notes.borrow().get(0) {
+        if let Some(n) = self.notes.get(0) {
             n.offset
         } else {
             0
@@ -58,7 +64,7 @@ impl VOPattern {
     }
 
     fn get_range_end_offset(&self) -> usize {
-        if let Some(n) = self.notes.borrow().last() {
+        if let Some(n) = self.notes.last() {
             n.offset + n.duration
         } else {
             0
@@ -70,22 +76,9 @@ impl VOPattern {
     }
 }
 
-pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
+pub fn compose(composition: &CompositionSettings, mut pitches: Pitches) {
     let tempo = composition.tempo as usize;
     let _channel = 0;
-
-    // // create the MIDI track for the tempo and time signature
-    //
-    // MidiTrack tempoTrack = new MidiTrack();
-    //
-    // // track 0 is typically the tempo map, set tempo and time signature
-    // TimeSignature ts = new TimeSignature();
-    // ts.setTimeSignature( props.TIME_SIGNATURE_BEAT_AMOUNT, props.TIME_SIGNATURE_BEAT_UNIT,
-    //                      TimeSignature.DEFAULT_METER, TimeSignature.DEFAULT_DIVISION );
-    //
-    // Tempo t = new Tempo();
-    // t.setBpm( theTempo );
-
     let mut messages: Vec<Message> = vec![];
 
     let tempo_msg = Message::MetaEvent {
@@ -102,25 +95,25 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
     });
     messages.push(Message::TrackChange);
 
-    let velocity = 100;
+    let _velocity = 100;
     let mut current_position = 0;
     let mut current_bar_length = 0;
     let mut note_length = composition.n1_length;
 
     let mut patterns: Vec<VOPattern> = vec![];
-    let mut notes = Rc::new(RefCell::new(vec![]));
 
-    let current_pattern = VOPattern {
-        notes: notes.clone(),
+    let mut current_pattern = VOPattern {
+        notes: vec![],
         pattern_num: 0,
         offset: current_position,
     };
 
-    for i in 0..pitches.len() {
-        let pitch = *pitches.get(i).unwrap(); // fixme
+    for mut i in 0..pitches.len() as isize {
+        let pitch = *pitches.get(i as usize).unwrap(); // fixme
 
         // swap note length if conflicts with previously added note in other pattern
-        if offset_conflict(current_position - current_pattern.offset, &patterns) {
+        let offset = current_pattern.offset;
+        if offset_conflict(current_position - offset, patterns.as_slice()) {
             if note_length == composition.n1_length {
                 note_length = composition.n2_length;
             } else {
@@ -129,34 +122,96 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
         }
 
         // create new note
-
-        //final VONote note = new VONote( Pitch.frequencyToMIDINote( pitch ),
-        //                                             currentPosition,
-        //                                           ( long )( noteLength * MIDI.QUARTER_NOTE ));
-        //
-        //             // add note to Vector (so it can be re-added in next iterations)
-        //
-        //             notes.add( note );
-        //
-        //             // update current sequence position
-        //
-        //             currentPosition  += note.duration;
-        //             currentBarLength += note.duration;
-
+        println!("before freq to midi");
         let note = VONote {
             note: frequency_to_midi_note(pitch),
             offset: current_position,
             duration: note_length as usize * QUARTER_NOTE,
         };
+        println!("after freq to midi");
         // update current sequence position
         current_position += &note.duration;
         current_bar_length += &note.duration;
 
         // add note to Vector (so it can be re-added in next iterations)
-        notes.borrow_mut().push(note);
+        current_pattern.add_note(note);
+
+        if current_bar_length / WHOLE_NOTE > composition.pattern_bars {
+            patterns.push(current_pattern.clone());
+
+            let _notes = current_pattern.notes.clone();
+            // store current notes in new pattern
+            current_pattern = VOPattern {
+                notes: vec![],
+                pattern_num: patterns.len(),
+                offset: current_position,
+            };
+
+            current_bar_length = 0;
+        }
+
+        // break the loop when we've rendered the desired amount of patterns
+        if patterns.len() >= composition.pattern_num {
+            break;
+        }
+
+        // if we have reached the end of the pitch range, start again
+        // from the beginning until we have rendered all the patterns
+        if i == (pitches.len() - 1) as isize {
+            pitches.reverse(); // go down the scale
+            i = -1; // todo  in origin source was -1,
+        }
+
+        let total_length = current_position;
+
+        //  for ( final VOPattern pattern : patterns )
+        //         {
+        //             float patternLength = 0f;
+        //
+        //             while ( patternLength < ( totalLength - pattern.offset ))
+        //             {
+        //                 for ( final VONote note : pattern.notes )
+        //                 {
+        //                     noteTrack.insertNote( channel, note.note, velocity,
+        //                                         ( long ) ( note.offset + patternLength ), note.duration );
+        //                 }
+        //                 patternLength += pattern.getRangeLength();
+        //             }
+        //
+        //             // create new track for pattern, if specified
+        //
+        //             if ( props.UNIQUE_TRACK_PER_PATTERN )
+        //             {
+        //                 noteTrack = createTrack( "melody" );
+        //                 tracks.add( noteTrack );
+        //             }
+        //         }
+
+        for p in &patterns {
+            let mut pattern_length = 0;
+            println!("for 1");
+            while pattern_length < (total_length - p.offset) {
+                println!("while 1");
+                for n in p.notes.iter() {
+                    println!("for 2");
+
+                    //todo hm ?
+                    messages.push(Message::MidiEvent {
+                        delta_time: n.duration as u32,
+                        event: MidiEvent::NoteOn {
+                            ch: _channel,
+                            note: n.note as u8,
+                            velocity: _velocity,
+                        },
+                    });
+                }
+
+                pattern_length += p.get_range_length();
+                println!("pattern_length {}", pattern_length);
+            }
+        }
     }
 
-    // ###############################
     messages.push(Message::MetaEvent {
         delta_time: 0,
         event: MetaEvent::EndOfTrack,
@@ -173,9 +228,9 @@ pub fn compose(composition: &CompositionSettings, pitches: Pitches) {
 }
 
 //fixme
-fn offset_conflict(note_offset: usize, patterns: &Vec<VOPattern>) -> bool {
+fn offset_conflict(note_offset: usize, patterns: &[VOPattern]) -> bool {
     for p in patterns {
-        if p.notes.borrow().len() > 0 && p.conflicts(note_offset) {
+        if p.notes.len() > 0 && p.conflicts(note_offset) {
             return true;
         }
     }
